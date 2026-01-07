@@ -156,22 +156,36 @@ class ParallelNystrom:
 
 def compute_nystrom_approximation(C, B, k):
     """
-    Computes a rank-k truncation of the Nystrom approximation. [cite: 8, 9]
-    Uses Eigendecomposition of B for numerical stability.
+    Given C and B from the Nystrom method, compute the low-rank approximation
+    A ≈ U_hat Σ_k U_hat^T
+    where U_hat are the approximated eigenvectors and Σ_k the approximated eigenvalues.
     """
-    B = B + np.eye(B.shape[0]) * 1e-12
-    try:
-        L = np.linalg.cholesky(B)
-    except np.linalg.LinAlgError:
-        vals, vecs = np.linalg.eigh(B)
-        vals = np.maximum(vals, 1e-12)
-        L = vecs @ np.diag(np.sqrt(vals))
+    # 1. Eigen-decomposition of the core matrix B
+    evals, evecs = np.linalg.eigh(B)
 
-    Z = np.linalg.solve(L.T, C.T).T
-    Q, R = np.linalg.qr(Z)
-    U_k, Sigma_k, _ = np.linalg.svd(R, full_matrices=False)
-    U_k, Sigma_k = U_k[:, :k], Sigma_k[:k]
-    return Q @ U_k, Sigma_k**2
+    # 2. Sort in descending order to handle the top-k approximation
+    idx = np.argsort(evals)[::-1]
+    evals = evals[idx]
+    evecs = evecs[:, idx]
+
+    # 3. Numerical stability: filter out near-zero eigenvalues
+    threshold = 1e-12
+    mask = evals > threshold
+
+    # Sigma contains the approximated eigenvalues of A
+    # Since B = Omega^T A Omega, its eigenvalues relate to the spectrum of A
+    Sigma_k = evals[mask]
+
+    # 4. Compute U_hat (Approximated Eigenvectors)
+    # Formula: U_hat = C * U_B * Sigma_B^-1
+    # We use a scale factor to normalize the columns
+    scale = np.zeros_like(evals)
+    scale[mask] = 1.0 / evals[mask]
+    U_hat = C @ evecs @ np.diag(scale)
+
+    # Return exactly what the main expects:
+    # U_hat_k (eigenvectors) and Sigma_k_sq (eigenvalues)
+    return U_hat[:, :k], Sigma_k[:k]
 
 
 def main():
@@ -184,11 +198,22 @@ def main():
     n_samples = 1000
     d = 90
     k = 200
-    c_squared = 1e4
+    c_squared = 5e6
 
     C, B = nystrom.run_nystrom(filepath, n_samples, d, k, c_squared)
 
     if rank == 0:
+
+        print("the value of c_squared is:", c_squared)
+        print("the rank k is:", k)
+
+        X_full, _ = load_svmlight_text(filepath, n_samples=n_samples, n_features=d)
+
+        # Example distance and kernel value
+        dist_es = np.sum((X_full[0] - X_full[1]) ** 2)
+        print(f"distance between the first two points for debugging: {dist_es:.2f}")
+        print(f"value (exp(-dist/c^2)): {np.exp(-dist_es/c_squared):.6e}")
+
         U_hat_k, Sigma_k_sq = compute_nystrom_approximation(C, B, k)
         A_nyst = U_hat_k @ np.diag(Sigma_k_sq) @ U_hat_k.T
 
@@ -201,7 +226,7 @@ def main():
         error_nuc = np.linalg.norm(A_full - A_nyst, ord="nuc") / np.linalg.norm(
             A_full, ord="nuc"
         )
-        print(f"\n--- RISULTATI ---")
+        print(f"\n--- RESULTS ---")
         print(f"Dataset: YearPredictionMSD (n={n_samples})")
         print(f"Rel. Nuclear Norm Error: {error_nuc:.6f}")
 
