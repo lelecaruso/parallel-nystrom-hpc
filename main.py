@@ -197,7 +197,7 @@ def main():
     filepath = "dataset/YearPredictionMSD.t"
     n_samples = 1000
     d = 90
-    k = 900
+    k = 50
     c_squared = 1e8
 
     C, B = nystrom.run_nystrom(filepath, n_samples, d, k, c_squared)
@@ -231,5 +231,73 @@ def main():
         print(f"Rel. Nuclear Norm Error: {error_nuc:.6f}")
 
 
+import matplotlib.pyplot as plt
+
+
+def main2():
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    nystrom = ParallelNystrom(comm)
+
+    # Dataset parameters
+    filepath = "dataset/YearPredictionMSD.t"
+    n_samples = 2000
+    d = 90
+    c_squared = 1e8  # Use the same bandwidth for all tests
+
+    # Ranks to test for the plot
+    k_values = [200, 400, 600, 800, 1000]
+    errors = []
+
+    if rank == 0:
+        print(f"Starting Benchmark: n={n_samples}, c_squared={c_squared}")
+        print("-" * 40)
+
+    for k in k_values:
+        # Each rank participates in the parallel computation
+        C, B = nystrom.run_nystrom(filepath, n_samples, d, k, c_squared)
+
+        if rank == 0:
+            # Reconstruction and Error Calculation (Root only)
+            U_hat_k, Sigma_k = compute_nystrom_approximation(C, B, k)
+            A_nyst = U_hat_k @ np.diag(Sigma_k) @ U_hat_k.T
+
+            # Compute Ground Truth Matrix (Full Kernel)
+            X_full, _ = load_svmlight_text(filepath, n_samples=n_samples, n_features=d)
+            sq_norms = np.sum(X_full**2, axis=1)[:, np.newaxis]
+            A_full = np.exp(
+                -(sq_norms + sq_norms.T - 2 * X_full @ X_full.T) / c_squared
+            )
+
+            # Error using Nuclear Norm
+            error_nuc = np.linalg.norm(A_full - A_nyst, ord="nuc") / np.linalg.norm(
+                A_full, ord="nuc"
+            )
+            errors.append(error_nuc)
+
+            print(f"k = {k:4d} | Relative Nuclear Error: {error_nuc:.6f}")
+
+    # Plotting Section (Only Rank 0)
+    if rank == 0:
+        plt.figure(figsize=(10, 6))
+        plt.plot(
+            k_values, errors, marker="s", linestyle="--", color="darkred", linewidth=2
+        )
+
+        # Formatting the plot
+        plt.title("Nyström Approximation Convergence (YearPredictionMSD)", fontsize=14)
+        plt.xlabel("Approximation Rank (k)", fontsize=12)
+        plt.ylabel("Relative Nuclear Norm Error", fontsize=12)
+        plt.grid(True, which="both", linestyle="--", alpha=0.5)
+
+        # Save the figure for your report
+        plt.savefig("nystrom_convergence_plot.png", dpi=300)
+        print("-" * 40)
+        print("Plot successfully saved as 'nystrom_convergence_plot.png'")
+        plt.show()
+        return
+
+
 if __name__ == "__main__":
-    main()
+    # Change main() to main2() here to run the benchmark
+    main2()
