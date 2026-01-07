@@ -84,16 +84,16 @@ class ParallelNystrom:
 
         self.n, self.n_local, self.d = n, n_local, d
 
-    def generate_omega(self, k, seed=42):
+    def generate_omega(self, l, seed=42):
         """
         Generates the sketching matrix Omega distributed across processors.
         """
         seed = self.comm.bcast(seed if self.rank == 0 else None, root=0)
         np.random.seed(seed + self.my_i * 1000)
-        self.Omega_i = np.random.randn(self.n_local, k)
+        self.Omega_i = np.random.randn(self.n_local, l)
         np.random.seed(seed + self.my_j * 1000)
-        self.Omega_j = np.random.randn(self.n_local, k)
-        self.k = k
+        self.Omega_j = np.random.randn(self.n_local, l)
+        self.l = l
 
     def compute_C_local(self, c_squared):
         """
@@ -114,7 +114,7 @@ class ParallelNystrom:
         Performs row-wise reduction to aggregate contributions to C_i = sum_j (A_ij * Omega_j).
         """
         row_comm = self.comm.Split(self.my_i, self.my_j)
-        self.C_i = np.zeros((self.n_local, self.k))
+        self.C_i = np.zeros((self.n_local, self.l))
         row_comm.Reduce(self.C_ij, self.C_i, op=MPI.SUM, root=0)
         row_comm.Free()
 
@@ -122,12 +122,12 @@ class ParallelNystrom:
         """
         Computes the core matrix B = Omega^T * A * Omega.
         This is done by aggregating local contributions: B = sum(Omega_i^T * A_ij * Omega_j).
-        Since B is a small (k x k) matrix, we use Allreduce to make it available
+        Since B is a small (l x l) matrix, we use Allreduce to make it available
         to all processors for the final Nystrom decomposition.
         """
         # Calcola B_ij = Omega_i.T @ C_ij
         B_local = self.Omega_i.T @ self.C_ij
-        self.B_global = np.zeros((self.k, self.k))
+        self.B_global = np.zeros((self.l, self.l))
         # Somma globale su TUTTI i processori
         self.comm.Allreduce(B_local, self.B_global, op=MPI.SUM)
 
@@ -136,7 +136,7 @@ class ParallelNystrom:
         Gathers blocks of C to the root processor for final reconstruction. [cite: 31]
         """
         if self.rank == 0:
-            self.C = np.zeros((self.n, self.k))
+            self.C = np.zeros((self.n, self.l))
             self.C[0 : self.n_local, :] = self.C_i
             for i in range(1, self.sqrt_P):
                 C_temp = self.comm.recv(source=i * self.sqrt_P, tag=200)
@@ -144,9 +144,9 @@ class ParallelNystrom:
         elif self.my_j == 0:
             self.comm.send(self.C_i, dest=0, tag=200)
 
-    def run_nystrom(self, filepath, n_samples, d, k, c_squared):
+    def run_nystrom(self, filepath, n_samples, d, l, c_squared):
         self.load_and_distribute_data(filepath, n_samples, d)
-        self.generate_omega(k)
+        self.generate_omega(l)
         self.compute_C_local(c_squared)
         self.reduce_C()
         self.allreduce_B()  # B è già sommato correttamente qui
@@ -197,10 +197,11 @@ def main():
     filepath = "dataset/YearPredictionMSD.t"
     n_samples = 1000
     d = 90
+    l = 200
     k = 50
     c_squared = 1e8
 
-    C, B = nystrom.run_nystrom(filepath, n_samples, d, k, c_squared)
+    C, B = nystrom.run_nystrom(filepath, n_samples, d, l, c_squared)
 
     if rank == 0:
 
