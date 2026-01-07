@@ -188,117 +188,71 @@ def compute_nystrom_approximation(C, B, k):
     return U_hat[:, :k], Sigma_k[:k]
 
 
+import matplotlib.pyplot as plt
+
+
 def main():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     nystrom = ParallelNystrom(comm)
 
-    # Parameters for YearPrediction MSD dataset
     filepath = "dataset/YearPredictionMSD.t"
     n_samples = 1000
     d = 90
-    l = 200
-    k = 50
     c_squared = 1e8
 
-    C, B = nystrom.run_nystrom(filepath, n_samples, d, l, c_squared)
+    # Definiamo i parametri da testare
+    l_values = [400, 700, 1000]
+    k_values = [25, 50, 100, 200, 400]
 
     if rank == 0:
-
-        print("the value of c_squared is:", c_squared)
-        print("the rank k is:", k)
-
-        X_full, _ = load_svmlight_text(filepath, n_samples=n_samples, n_features=d)
-
-        # Example distance and kernel value
-        dist_es = np.sum((X_full[0] - X_full[1]) ** 2)
-        print(f"distance between the first two points for debugging: {dist_es:.2f}")
-        print(f"value (exp(-dist/c^2)): {np.exp(-dist_es/c_squared):.6e}")
-
-        U_hat_k, Sigma_k_sq = compute_nystrom_approximation(C, B, k)
-        A_nyst = U_hat_k @ np.diag(Sigma_k_sq) @ U_hat_k.T
-
-        # Compute full kernel matrix for error calculation
+        plt.figure(figsize=(12, 7))
         X_full, _ = load_svmlight_text(filepath, n_samples=n_samples, n_features=d)
         sq_norms = np.sum(X_full**2, axis=1)[:, np.newaxis]
         A_full = np.exp(-(sq_norms + sq_norms.T - 2 * X_full @ X_full.T) / c_squared)
+        norm_A = np.linalg.norm(A_full, ord="nuc")
 
-        # Relative Nuclear Norm Error
-        error_nuc = np.linalg.norm(A_full - A_nyst, ord="nuc") / np.linalg.norm(
-            A_full, ord="nuc"
-        )
-        print(f"\n--- RESULTS ---")
-        print(f"Dataset: YearPredictionMSD (n={n_samples})")
-        print(f"Rel. Nuclear Norm Error: {error_nuc:.6f}")
+    for l in l_values:
+        errors_for_l = []
+        # Calcolo parallelo una sola volta per ogni l
+        C, B = nystrom.run_nystrom(filepath, n_samples, d, l, c_squared)
 
+        for k in k_values:
+            # Salta se il rango richiesto è maggiore dello sketch disponibile
+            if k > l:
+                continue
 
-import matplotlib.pyplot as plt
+            if rank == 0:
+                # Approssimazione di rango k partendo dallo sketch l
+                U_hat_k, Sigma_k = compute_nystrom_approximation(C, B, k)
+                A_nyst = U_hat_k @ np.diag(Sigma_k) @ U_hat_k.T
 
-
-def main2():
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    nystrom = ParallelNystrom(comm)
-
-    # Dataset parameters
-    filepath = "dataset/YearPredictionMSD.t"
-    n_samples = 2000
-    d = 90
-    c_squared = 1e8  # Use the same bandwidth for all tests
-
-    # Ranks to test for the plot
-    k_values = [200, 400, 600, 800, 1000]
-    errors = []
-
-    if rank == 0:
-        print(f"Starting Benchmark: n={n_samples}, c_squared={c_squared}")
-        print("-" * 40)
-
-    for k in k_values:
-        # Each rank participates in the parallel computation
-        C, B = nystrom.run_nystrom(filepath, n_samples, d, k, c_squared)
+                error_nuc = np.linalg.norm(A_full - A_nyst, ord="nuc") / norm_A
+                errors_for_l.append(error_nuc)
+                print(f"l={l:4d}, k={k:4d} | Error: {error_nuc:.6e}")
 
         if rank == 0:
-            # Reconstruction and Error Calculation (Root only)
-            U_hat_k, Sigma_k = compute_nystrom_approximation(C, B, k)
-            A_nyst = U_hat_k @ np.diag(Sigma_k) @ U_hat_k.T
-
-            # Compute Ground Truth Matrix (Full Kernel)
-            X_full, _ = load_svmlight_text(filepath, n_samples=n_samples, n_features=d)
-            sq_norms = np.sum(X_full**2, axis=1)[:, np.newaxis]
-            A_full = np.exp(
-                -(sq_norms + sq_norms.T - 2 * X_full @ X_full.T) / c_squared
+            plt.plot(
+                k_values[: len(errors_for_l)],
+                errors_for_l,
+                marker="o",
+                label=f"Sketch l={l}",
             )
 
-            # Error using Nuclear Norm
-            error_nuc = np.linalg.norm(A_full - A_nyst, ord="nuc") / np.linalg.norm(
-                A_full, ord="nuc"
-            )
-            errors.append(error_nuc)
-
-            print(f"k = {k:4d} | Relative Nuclear Error: {error_nuc:.6f}")
-
-    # Plotting Section (Only Rank 0)
     if rank == 0:
-        plt.figure(figsize=(10, 6))
-        plt.plot(
-            k_values, errors, marker="s", linestyle="--", color="darkred", linewidth=2
+        plt.title(
+            "Nyström Convergence: Impact of Sketch Size (l) and Rank (k)", fontsize=14
         )
-
-        # Formatting the plot
-        plt.title("Nyström Approximation Convergence (YearPredictionMSD)", fontsize=14)
-        plt.xlabel("Approximation Rank (k)", fontsize=12)
+        plt.xlabel("Target Rank (k)", fontsize=12)
         plt.ylabel("Relative Nuclear Norm Error", fontsize=12)
+        plt.yscale(
+            "log"
+        )  # La scala logaritmica aiuta a vedere bene le differenze piccole
+        plt.legend()
         plt.grid(True, which="both", linestyle="--", alpha=0.5)
-
-        # Save the figure for your report
-        plt.savefig("nystrom_convergence_plot.png", dpi=300)
-        print("-" * 40)
-        print("Plot successfully saved as 'nystrom_convergence_plot.png'")
+        plt.savefig("nystrom_l_vs_k_comparison.png", dpi=300)
         plt.show()
-        return
 
 
 if __name__ == "__main__":
-    # Change main() to main2() here to run the benchmark
-    main2()
+    main()
