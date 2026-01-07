@@ -197,8 +197,8 @@ def main():
     filepath = "dataset/YearPredictionMSD.t"
     n_samples = 1000
     d = 90
-    k = 200
-    c_squared = 5e6
+    k = 900
+    c_squared = 1e8
 
     C, B = nystrom.run_nystrom(filepath, n_samples, d, k, c_squared)
 
