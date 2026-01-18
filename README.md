@@ -8,12 +8,11 @@ This project implements the **Nystrom approximation** for large kernel matrices 
 - Python 3.8+
 - `mpi4py`
 - `numpy`
-- `scipy`
 
 Install dependencies with:
 
 ```bash
-pip install numpy scipy mpi4py
+pip install numpy mpi4py
 ```
 
 Run The project:
